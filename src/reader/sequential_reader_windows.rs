@@ -2,8 +2,8 @@
 #![allow(non_snake_case)]
 use std::ffi::c_void;
 use std::io::{Read, Seek};
-use windows_sys::Win32::Foundation::GENERIC_READ;
 use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{GENERIC_READ, GetLastError};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OVERLAPPED, FILE_FLAG_SEQUENTIAL_SCAN,
     FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, ReadFile,
@@ -47,6 +47,10 @@ impl Drop for FileHandle {
     fn drop(&mut self) {
         let ret = unsafe { CloseHandle(self.handle) };
         println!("FileHandle Drop: ret={}", ret);
+        if ret != 0 {
+            let err = unsafe { GetLastError() };
+            eprintln!("CloseHandle failed with error: {}", err);
+        }
     }
 }
 
@@ -55,12 +59,22 @@ struct IocpHandle {
 }
 
 impl IocpHandle {
-    fn new(filehandle: *mut c_void, existing_completion_port: *mut c_void) -> anyhow::Result<Self> {
-        let iocp = unsafe { CreateIoCompletionPort(filehandle, existing_completion_port, 0, 0) };
+    fn new() -> anyhow::Result<Self> {
+        let iocp =
+            unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 0) };
         if iocp == std::ptr::null_mut() {
-            anyhow::bail!("CreateIoCompletionPort Failed");
+            anyhow::bail!("CreateIoCompletionPort New Failed");
         }
         Ok(Self { handle: iocp })
+    }
+
+    fn init(&mut self, filehandle: *mut c_void) -> anyhow::Result<()> {
+        let new_handle = unsafe { CreateIoCompletionPort(filehandle, self.handle, 0, 0) };
+        if new_handle == std::ptr::null_mut() {
+            anyhow::bail!("CreateIoCompletionPort Init Failed");
+        }
+        self.handle = new_handle;
+        Ok(())
     }
 }
 
@@ -68,6 +82,10 @@ impl Drop for IocpHandle {
     fn drop(&mut self) {
         let ret = unsafe { CloseHandle(self.handle) };
         println!("IocpHandle Drop: ret={}", ret);
+        if ret == 0 {
+            let err = unsafe { GetLastError() };
+            eprintln!("CloseHandle failed with error: {}", err);
+        }
     }
 }
 
@@ -82,9 +100,8 @@ pub struct SequentialReader {
     file_size: u64,
     init_flag: bool,
     pendding: usize,
-    #[allow(unused)]
-    iocp1: IocpHandle,
-    iocp2: IocpHandle,
+
+    iocp: IocpHandle,
 }
 
 impl SequentialReader {
@@ -100,8 +117,8 @@ impl SequentialReader {
 
         let handle = FileHandle::new(fpath)?;
 
-        let iocp1 = IocpHandle::new(INVALID_HANDLE_VALUE, std::ptr::null_mut())?;
-        let iocp2 = IocpHandle::new(handle.handle, iocp1.handle)?;
+        let mut iocp = IocpHandle::new()?;
+        iocp.init(handle.handle)?;
 
         let data_pose = ReaderDataPos {
             buf_idx: 0,
@@ -124,8 +141,7 @@ impl SequentialReader {
             file_size: file_size,
             init_flag: false,
             pendding: 0,
-            iocp1: iocp1,
-            iocp2: iocp2,
+            iocp,
         })
     }
 
@@ -175,6 +191,10 @@ impl SequentialReader {
             return Ok(());
         }
 
+        if self.buffers_status[self.data_pos.buf_idx] == ReaderBufferStatus::Invalid {
+            return Ok(());
+        }
+
         if !self.init_flag {
             for buf_idx in 0..self.buffers.len() {
                 self.submit_read_event(buf_idx);
@@ -188,7 +208,7 @@ impl SequentialReader {
             let mut pov: *mut OVERLAPPED = std::ptr::null_mut();
             let _ok = unsafe {
                 GetQueuedCompletionStatus(
-                    self.iocp2.handle,
+                    self.iocp.handle,
                     &mut bytes_transferred as *mut u32,
                     &mut completion_key as *mut usize,
                     &mut pov as *mut *mut OVERLAPPED,
@@ -234,9 +254,10 @@ impl SequentialReader {
             let buf_slice = unsafe {
                 std::slice::from_raw_parts_mut(self.buffers[buf_idx].data, remaining_bytes)
             };
+
             f.read_exact(buf_slice).unwrap();
             self.buffers[buf_idx].len = remaining_bytes;
-
+            self.buffers_status[buf_idx] = ReaderBufferStatus::Ready4Read;
             self.file_pos_cursor += remaining_bytes as u64;
             assert_eq!(self.file_pos_cursor, self.file_size);
             return;
@@ -289,5 +310,3 @@ impl SequentialReader {
         self.file_pos_cursor += self.buffer_size as u64;
     }
 }
-
-

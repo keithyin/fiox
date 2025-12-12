@@ -5,7 +5,11 @@ edition = "2024"
 description = "bam2ab1"
 license = "MIT"
 
-[dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+io-uring = "0.7"
+
+[target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_System_IO",
     "Win32_Security",
@@ -15,6 +19,5 @@ windows-sys = { version = "0.59", features = [
     "Win32_System_Memory",
 ] }
 
+[dependencies]
 anyhow = "1"
-libc = "0.2"
-io-uring = "0.7"
