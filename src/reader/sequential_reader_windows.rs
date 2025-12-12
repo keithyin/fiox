@@ -57,6 +57,22 @@ impl Drop for FileHandle {
     }
 }
 
+struct IocpHandle {
+    iocp: *mut c_void,
+}
+
+impl IocpHandle {
+    fn new(filehandle: &FileHandle, existing_completion_port: *mut c_void) -> anyhow::Result<Self> {
+        let iocp =  unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 0) };
+        if iocp == std::ptr::null_mut() {
+            anyhow::bail!("CreateIoCompletionPort Failed");
+        }
+        Ok(Self { iocp })
+    }
+}
+
+
+
 pub struct SequentialReader {
     fpath: String,
     handle: FileHandle,
