@@ -53,6 +53,9 @@ impl ReaderBuffer {
     pub fn cap(&self) -> usize {
         self.cap
     }
+    pub fn len(&self) -> usize {
+        self.len
+    }
 }
 
 impl Deref for ReaderBuffer {

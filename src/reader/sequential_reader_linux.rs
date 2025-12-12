@@ -13,6 +13,7 @@ use super::buffer_linux::ReaderBuffer;
 pub struct SequentialReader {
     #[allow(unused)]
     file: fs::File, // 不能删掉。要保证文件是打开的！
+    fpath: String,
     buff_size: usize,
     ring: IoUring,
     buffers: Vec<ReaderBuffer>,
@@ -83,6 +84,7 @@ impl SequentialReader {
 
         Ok(Self {
             file,
+            fpath: fpath.to_string(),
             buff_size: buffer_size,
             ring,
             buffers,
@@ -116,7 +118,7 @@ impl SequentialReader {
             let (fill_size, current_buf_remaining) = {
                 let buf = &self.buffers[buf_idx];
 
-                let current_buf_remaining = (buf.cap() - self.data_location.offset) as usize;
+                let current_buf_remaining = (buf.len() - self.data_location.offset) as usize;
                 let fill_size = current_buf_remaining.min(expected_data_size);
                 data[data_start..data_start + fill_size].copy_from_slice(
                     &buf[self.data_location.offset..self.data_location.offset + fill_size],
@@ -145,6 +147,11 @@ impl SequentialReader {
         if self.buffers_flag[buf_idx] == ReaderBufferStatus::Ready4Read {
             return Ok(());
         }
+
+        if self.buffers_flag[buf_idx] == ReaderBufferStatus::Invalid {
+            return Ok(());
+        }
+
         // initial state
         if !self.init_flag {
             for idx in 0..self.buffers.len() {
@@ -165,6 +172,8 @@ impl SequentialReader {
 
             let idx = cqe.user_data() as usize;
             self.buffers_flag[idx] = ReaderBufferStatus::Ready4Read;
+            self.buffers[idx].len = cqe.result() as usize;
+            assert_eq!(self.buffers[idx].len, self.buff_size);
 
             if self.buffers_flag[buf_idx] == ReaderBufferStatus::Ready4Read {
                 return Ok(());
@@ -184,15 +193,18 @@ impl SequentialReader {
         if (self.file_pos_cursor + self.buff_size as u64) > self.file_size {
             // last read
             let remaining_bytes = (self.file_size - self.file_pos_cursor) as usize;
-
-            self.file
-                .seek(std::io::SeekFrom::Start(self.file_pos_cursor))?;
-            self.file
-                .read_exact(&mut self.buffers[buf_idx][..remaining_bytes])?;
+            let mut f = std::fs::File::open(&self.fpath)?;
+            f.seek(std::io::SeekFrom::Start(self.file_pos_cursor))?;
+            f.read_exact(&mut self.buffers[buf_idx][..remaining_bytes])?;
+            // println!(" ..... LAST READ HERE .....");
+            self.buffers_flag[buf_idx] = ReaderBufferStatus::Ready4Read;
+            self.buffers[buf_idx].len = remaining_bytes;
+            self.file_pos_cursor += remaining_bytes as u64;
             return Ok(());
         }
 
         let buf_cap = self.buffers[buf_idx].cap();
+        self.buffers[buf_idx].len = 0; // reset length before read
         let sqe = io_uring::opcode::ReadFixed::new(
             io_uring::types::Fixed(0),
             self.buffers[buf_idx].as_mut_ptr(),
@@ -210,6 +222,7 @@ impl SequentialReader {
                 .context("Failed to push submission queue entry")?;
         }
         self.pending_io += 1;
+        self.file_pos_cursor += buf_cap as u64;
         Ok(())
     }
 }
