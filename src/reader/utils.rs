@@ -1,8 +1,8 @@
-use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
-
 /// convert Rust &str path to wide null-terminated Vec<u16>
 #[cfg(windows)]
 pub fn str_to_wide(path: &str) -> Vec<u16> {
+    use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
+
     let mut v: Vec<u16> = OsStr::new(path).encode_wide().collect();
     v.push(0);
     v
@@ -19,11 +19,15 @@ pub struct ReaderDataPos {
     pub offset: usize,
 }
 
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ReaderBufferStatus {
     #[default]
     Ready4Submit,
     Ready4Read,
     Invalid,
+}
+
+pub const fn get_page_size() -> usize {
+    // unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize }
+    4096
 }

@@ -16,3 +16,5 @@ windows-sys = { version = "0.59", features = [
 ] }
 
 anyhow = "1"
+libc = "0.2"
+io-uring = "0.7"

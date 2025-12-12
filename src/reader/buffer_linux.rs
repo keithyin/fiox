@@ -1,4 +1,6 @@
-#![cfg(linux)]
+#![cfg(target_os = "linux")]
+
+use std::ops::{Deref, DerefMut};
 
 pub fn aligned_alloc(size: usize, page_size: usize) -> Vec<u8> {
     use std::ptr;
@@ -31,17 +33,38 @@ impl Deref for AlignedVecU8 {
     }
 }
 
+impl DerefMut for AlignedVecU8 {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.vec
+    }
+}
+
 pub struct ReaderBuffer {
-    data: AlignedVecU8,
+    pub data: AlignedVecU8,
+    pub len: usize,
+    pub cap: usize
 }
 
 impl ReaderBuffer {
     pub fn new(buf_size: usize, page_size: usize) -> Self {
-        let vec = AlignedVecU8::new(buf_size, page_size);
-        Self {
-            vec,
-            cap: buf_size,
-            size: 0,
-        }
+        let data = AlignedVecU8::new(buf_size, page_size);
+        Self { data, len: 0,cap: buf_size }
+    }
+    pub fn cap(&self) -> usize {
+        self.cap
+    }
+}
+
+impl Deref for ReaderBuffer {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl DerefMut for ReaderBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.data
     }
 }
