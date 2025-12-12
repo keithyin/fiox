@@ -2,6 +2,8 @@
 name = "fiox"
 version = "0.1.0"
 edition = "2024"
+description = "bam2ab1"
+license = "MIT"
 
 [dependencies]
 windows-sys = { version = "0.59", features = [
