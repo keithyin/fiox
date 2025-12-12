@@ -13,14 +13,8 @@ use windows_sys::Win32::System::IO::{
 };
 use windows_sys::Win32::System::Threading::INFINITE;
 
-use super::buffer_windows::{Buffer, ReaderBufferStatus};
-use super::utils::{get_file_size, str_to_wide};
-
-#[derive(Debug, Default, Clone, Copy)]
-struct DataPos {
-    buf_idx: usize,
-    offset: usize,
-}
+use super::buffer_windows::ReaderBuffer;
+use super::utils::{ReaderBufferStatus, ReaderDataPos, get_file_size, str_to_wide};
 
 struct FileHandle {
     handle: *mut c_void,
@@ -51,64 +45,65 @@ impl FileHandle {
 
 impl Drop for FileHandle {
     fn drop(&mut self) {
-        unsafe {
-            CloseHandle(self.handle);
-        }
+        let ret = unsafe { CloseHandle(self.handle) };
+        println!("FileHandle Drop: ret={}", ret);
     }
 }
 
 struct IocpHandle {
-    iocp: *mut c_void,
+    handle: *mut c_void,
 }
 
 impl IocpHandle {
-    fn new(filehandle: &FileHandle, existing_completion_port: *mut c_void) -> anyhow::Result<Self> {
-        let iocp =  unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 0) };
+    fn new(filehandle: *mut c_void, existing_completion_port: *mut c_void) -> anyhow::Result<Self> {
+        let iocp = unsafe { CreateIoCompletionPort(filehandle, existing_completion_port, 0, 0) };
         if iocp == std::ptr::null_mut() {
             anyhow::bail!("CreateIoCompletionPort Failed");
         }
-        Ok(Self { iocp })
+        Ok(Self { handle: iocp })
     }
 }
 
-
+impl Drop for IocpHandle {
+    fn drop(&mut self) {
+        let ret = unsafe { CloseHandle(self.handle) };
+        println!("IocpHandle Drop: ret={}", ret);
+    }
+}
 
 pub struct SequentialReader {
     fpath: String,
     handle: FileHandle,
-    iocp: *mut c_void,
-    buffers: Vec<super::buffer_windows::Buffer>,
+    buffers: Vec<super::buffer_windows::ReaderBuffer>,
     buffers_status: Vec<ReaderBufferStatus>,
     buffer_size: usize,
-    data_pos: DataPos,
+    data_pos: ReaderDataPos,
     file_pos_cursor: u64,
     file_size: u64,
     init_flag: bool,
     pendding: usize,
+    #[allow(unused)]
+    iocp1: IocpHandle,
+    iocp2: IocpHandle,
 }
 
 impl SequentialReader {
-    pub fn new(fpath: &str, start_pos: u64, buffer_size: usize, num_buffer: usize) -> Self {
+    pub fn new(
+        fpath: &str,
+        start_pos: u64,
+        buffer_size: usize,
+        num_buffer: usize,
+    ) -> anyhow::Result<Self> {
         assert!(buffer_size % 4096 == 0);
 
         let file_size = get_file_size(fpath);
 
-        let handle = FileHandle::new(fpath).unwrap();
+        let handle = FileHandle::new(fpath)?;
 
-        let iocp =
-            unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 0) };
+        let iocp1 = IocpHandle::new(INVALID_HANDLE_VALUE, std::ptr::null_mut())?;
+        let iocp2 = IocpHandle::new(handle.handle, iocp1.handle)?;
 
-        if iocp == std::ptr::null_mut() {
-            panic!("invalid iocp 1");
-        }
-
-        let iocp = unsafe { CreateIoCompletionPort(handle.handle, iocp, 0, 0) };
-
-        if iocp == std::ptr::null_mut() {
-            panic!("invalid iocp 1");
-        }
-
-        let data_pose = DataPos {
+        let data_pose = ReaderDataPos {
             buf_idx: 0,
             offset: (start_pos % 4096) as usize,
         };
@@ -116,12 +111,11 @@ impl SequentialReader {
 
         let buffers = (0..num_buffer)
             .into_iter()
-            .map(|idx| Buffer::new(buffer_size, idx))
+            .map(|idx| ReaderBuffer::new(buffer_size, idx))
             .collect();
-        Self {
+        Ok(Self {
             fpath: fpath.to_string(),
             handle: handle,
-            iocp: iocp,
             buffers: buffers,
             buffers_status: vec![ReaderBufferStatus::default(); num_buffer],
             buffer_size: buffer_size,
@@ -130,18 +124,20 @@ impl SequentialReader {
             file_size: file_size,
             init_flag: false,
             pendding: 0,
-        }
+            iocp1: iocp1,
+            iocp2: iocp2,
+        })
     }
 
-    pub fn read2buf(&mut self, buf: &mut [u8]) -> usize {
+    pub fn read2buf(&mut self, buf: &mut [u8]) -> anyhow::Result<usize> {
         let req_len = buf.len();
         let mut remaining_bytes = req_len;
         let mut fill_pos = 0;
 
         while remaining_bytes > 0 {
-            self.wait_inner_buf_ready();
+            self.wait_inner_buf_ready()?;
             if self.buffers_status[self.data_pos.buf_idx] == ReaderBufferStatus::Invalid {
-                return fill_pos;
+                return Ok(fill_pos);
             }
 
             let cur_buf_read_n =
@@ -171,12 +167,12 @@ impl SequentialReader {
             }
         }
 
-        return req_len;
+        return Ok(req_len);
     }
 
-    fn wait_inner_buf_ready(&mut self) -> Option<()> {
+    fn wait_inner_buf_ready(&mut self) -> anyhow::Result<()> {
         if self.buffers_status[self.data_pos.buf_idx] == ReaderBufferStatus::Ready4Read {
-            return Some(());
+            return Ok(());
         }
 
         if !self.init_flag {
@@ -192,7 +188,7 @@ impl SequentialReader {
             let mut pov: *mut OVERLAPPED = std::ptr::null_mut();
             let _ok = unsafe {
                 GetQueuedCompletionStatus(
-                    self.iocp,
+                    self.iocp2.handle,
                     &mut bytes_transferred as *mut u32,
                     &mut completion_key as *mut usize,
                     &mut pov as *mut *mut OVERLAPPED,
@@ -204,7 +200,7 @@ impl SequentialReader {
                 panic!("pov is null");
             }
 
-            let task: *mut Buffer = pov as *mut Buffer;
+            let task: *mut ReaderBuffer = pov as *mut ReaderBuffer;
             unsafe {
                 (*task).len = bytes_transferred as usize;
             }
@@ -214,11 +210,11 @@ impl SequentialReader {
             self.buffers_status[idx] = ReaderBufferStatus::Ready4Read;
             self.pendding -= 1;
             if self.buffers_status[self.data_pos.buf_idx] == ReaderBufferStatus::Ready4Read {
-                break;
+                return Ok(());
             }
         }
 
-        Some(())
+        anyhow::bail!("buf_idx={} request failed", self.data_pos.buf_idx)
     }
 
     fn submit_read_event(&mut self, buf_idx: usize) {
@@ -300,10 +296,10 @@ mod test {
 
     #[test]
     fn test_sequential_reader() {
-        let mut reader = SequentialReader::new("test_data/data.txt", 0, 4096, 2);
+        let mut reader = SequentialReader::new("test_data/data.txt", 0, 4096, 2).unwrap();
         let mut buf = vec![0_u8; 112560];
         loop {
-            let n = reader.read2buf(&mut buf);
+            let n = reader.read2buf(&mut buf).unwrap();
             if n == 0 {
                 break;
             }
