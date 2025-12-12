@@ -22,9 +22,44 @@ struct DataPos {
     offset: usize,
 }
 
+struct FileHandle {
+    handle: *mut c_void,
+}
+impl FileHandle {
+    fn new(fpath: &str) -> anyhow::Result<Self> {
+        let fpath_wide = str_to_wide(fpath);
+
+        let handle = unsafe {
+            CreateFileW(
+                fpath_wide.as_ptr(),
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED | FILE_FLAG_SEQUENTIAL_SCAN,
+                std::ptr::null_mut(),
+            )
+        };
+
+        if handle == INVALID_HANDLE_VALUE {
+            anyhow::bail!("INVALID_HANDLE_VALUE");
+        }
+
+        Ok(Self { handle })
+    }
+}
+
+impl Drop for FileHandle {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.handle);
+        }
+    }
+}
+
 pub struct SequentialReader {
     fpath: String,
-    handle: *mut c_void,
+    handle: FileHandle,
     iocp: *mut c_void,
     buffers: Vec<super::buffer_windows::Buffer>,
     buffers_status: Vec<ReaderBufferStatus>,
@@ -41,25 +76,9 @@ impl SequentialReader {
         assert!(buffer_size % 4096 == 0);
 
         let file_size = get_file_size(fpath);
-        let fpath_wide = str_to_wide(fpath);
 
-        let handle = unsafe {
-            CreateFileW(
-                fpath_wide.as_ptr(),
-                GENERIC_READ,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                std::ptr::null(),
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED | FILE_FLAG_SEQUENTIAL_SCAN,
-                std::ptr::null_mut(),
-            )
-        };
+        let handle = FileHandle::new(fpath).unwrap();
 
-        if handle == INVALID_HANDLE_VALUE {
-            panic!("invalid handle value");
-        }
-
-        // TODO: clean up resources
         let iocp =
             unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 0) };
 
@@ -67,7 +86,7 @@ impl SequentialReader {
             panic!("invalid iocp 1");
         }
 
-        let iocp = unsafe { CreateIoCompletionPort(handle, iocp, 0, 0) };
+        let iocp = unsafe { CreateIoCompletionPort(handle.handle, iocp, 0, 0) };
 
         if iocp == std::ptr::null_mut() {
             panic!("invalid iocp 1");
@@ -155,7 +174,7 @@ impl SequentialReader {
             let mut bytes_transferred: u32 = 0;
             let mut completion_key: usize = 0;
             let mut pov: *mut OVERLAPPED = std::ptr::null_mut();
-            let ok = unsafe {
+            let _ok = unsafe {
                 GetQueuedCompletionStatus(
                     self.iocp,
                     &mut bytes_transferred as *mut u32,
@@ -239,9 +258,9 @@ impl SequentialReader {
         self.buffers[buf_idx].offset = self.file_pos_cursor;
         self.buffers[buf_idx].len = 0;
 
-        let ok = unsafe {
+        let _ok = unsafe {
             ReadFile(
-                self.handle,
+                self.handle.handle,
                 self.buffers[buf_idx].data as *mut _,
                 self.buffer_size as u32,
                 std::ptr::null_mut(), // lpNumberOfBytesRead = NULL for async
@@ -256,16 +275,6 @@ impl SequentialReader {
         self.pendding += 1;
 
         self.file_pos_cursor += self.buffer_size as u64;
-    }
-}
-
-impl Drop for SequentialReader {
-    fn drop(&mut self) {
-        unsafe {
-            if self.handle != INVALID_HANDLE_VALUE {
-                CloseHandle(self.handle);
-            }
-        }
     }
 }
 
