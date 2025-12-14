@@ -13,8 +13,10 @@ use windows_sys::Win32::System::IO::{
 };
 use windows_sys::Win32::System::Threading::INFINITE;
 
-use super::buffer_windows::ReaderBuffer;
-use super::utils::{ReaderBufferStatus, ReaderDataPos, get_file_size, str_to_wide};
+use super::buffer::ReaderBuffer;
+use crate::buffer_aux::{BufferStatus, BufferDataPos};
+use super::utils::str_to_wide;
+use crate::utils::get_file_size;
 
 struct FileHandle {
     handle: *mut c_void,
@@ -92,10 +94,10 @@ impl Drop for IocpHandle {
 pub struct SequentialReader {
     fpath: String,
     handle: FileHandle,
-    buffers: Vec<super::buffer_windows::ReaderBuffer>,
-    buffers_status: Vec<ReaderBufferStatus>,
+    buffers: Vec<super::buffer::ReaderBuffer>,
+    buffers_status: Vec<BufferStatus>,
     buffer_size: usize,
-    data_pos: ReaderDataPos,
+    data_pos: BufferDataPos,
     file_pos_cursor: u64,
     file_size: u64,
     init_flag: bool,
@@ -120,7 +122,7 @@ impl SequentialReader {
         let mut iocp = IocpHandle::new()?;
         iocp.init(handle.handle)?;
 
-        let data_pose = ReaderDataPos {
+        let data_pose = BufferDataPos {
             buf_idx: 0,
             offset: (start_pos % 4096) as usize,
         };
@@ -134,7 +136,7 @@ impl SequentialReader {
             fpath: fpath.to_string(),
             handle: handle,
             buffers: buffers,
-            buffers_status: vec![ReaderBufferStatus::default(); num_buffer],
+            buffers_status: vec![BufferStatus::default(); num_buffer],
             buffer_size: buffer_size,
             data_pos: data_pose,
             file_pos_cursor: file_pos_cursor,
@@ -152,7 +154,7 @@ impl SequentialReader {
 
         while remaining_bytes > 0 {
             self.wait_inner_buf_ready()?;
-            if self.buffers_status[self.data_pos.buf_idx] == ReaderBufferStatus::Invalid {
+            if self.buffers_status[self.data_pos.buf_idx] == BufferStatus::Invalid {
                 return Ok(fill_pos);
             }
 
@@ -174,7 +176,7 @@ impl SequentialReader {
             remaining_bytes -= cur_buf_read_n;
 
             if self.data_pos.offset == self.buffers[self.data_pos.buf_idx].len {
-                self.buffers_status[self.data_pos.buf_idx] = ReaderBufferStatus::Ready4Submit;
+                self.buffers_status[self.data_pos.buf_idx] = BufferStatus::Ready4Submit;
                 self.submit_read_event(self.data_pos.buf_idx);
 
                 self.data_pos.buf_idx += 1;
@@ -187,11 +189,11 @@ impl SequentialReader {
     }
 
     fn wait_inner_buf_ready(&mut self) -> anyhow::Result<()> {
-        if self.buffers_status[self.data_pos.buf_idx] == ReaderBufferStatus::Ready4Read {
+        if self.buffers_status[self.data_pos.buf_idx] == BufferStatus::Ready4Process {
             return Ok(());
         }
 
-        if self.buffers_status[self.data_pos.buf_idx] == ReaderBufferStatus::Invalid {
+        if self.buffers_status[self.data_pos.buf_idx] == BufferStatus::Invalid {
             return Ok(());
         }
 
@@ -227,9 +229,9 @@ impl SequentialReader {
 
             assert_eq!(bytes_transferred, self.buffer_size as u32);
             let idx = unsafe { (*task).idx };
-            self.buffers_status[idx] = ReaderBufferStatus::Ready4Read;
+            self.buffers_status[idx] = BufferStatus::Ready4Process;
             self.pendding -= 1;
-            if self.buffers_status[self.data_pos.buf_idx] == ReaderBufferStatus::Ready4Read {
+            if self.buffers_status[self.data_pos.buf_idx] == BufferStatus::Ready4Process {
                 return Ok(());
             }
         }
@@ -239,7 +241,7 @@ impl SequentialReader {
 
     fn submit_read_event(&mut self, buf_idx: usize) {
         if self.file_pos_cursor >= self.file_size {
-            self.buffers_status[buf_idx] = ReaderBufferStatus::Invalid;
+            self.buffers_status[buf_idx] = BufferStatus::Invalid;
             return;
         }
 
@@ -257,7 +259,7 @@ impl SequentialReader {
 
             f.read_exact(buf_slice).unwrap();
             self.buffers[buf_idx].len = remaining_bytes;
-            self.buffers_status[buf_idx] = ReaderBufferStatus::Ready4Read;
+            self.buffers_status[buf_idx] = BufferStatus::Ready4Process;
             self.file_pos_cursor += remaining_bytes as u64;
             assert_eq!(self.file_pos_cursor, self.file_size);
             return;
