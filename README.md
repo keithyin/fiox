@@ -21,7 +21,7 @@ Paired with efficient **lock-free ring buffers**, RingIO enables seamless zero-c
 
 
 
-## SequentialReader
+### SequentialReader
 
 ``` rust
 
@@ -42,7 +42,7 @@ loop {
 }
 ```
 
-## SequentialWriter
+### SequentialWriter
 
 ```rust
 #[test]
