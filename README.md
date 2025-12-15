@@ -45,7 +45,6 @@ loop {
 ### SequentialWriter
 
 ```rust
-#[test]
     
 let mut writer =
     SequentialWriter::new("test_data/test_data_writer.txt", 0, 4096, 2).unwrap();
