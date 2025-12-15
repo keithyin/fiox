@@ -2,15 +2,17 @@
 name = "fiox"
 version = "0.1.0"
 edition = "2024"
-description = "bam2ab1"
+description = "file I/O using io_uring/iocp"
 license = "MIT"
+repository = "https://github.com/keithyin/fiox"
+exclude = ["test_data/*"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 io-uring = "0.7"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = [
+windows-sys = { version = "0.61", features = [
     "Win32_System_IO",
     "Win32_Security",
     "Win32_Foundation",
