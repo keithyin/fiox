@@ -1,31 +1,32 @@
 #![cfg(target_os = "linux")]
 use std::{
     fs::{self, OpenOptions},
-    io::{Read, Seek},
+    io::{Read, Seek, Write},
     os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
 };
 
-use crate::reader::utils::{ReaderBufferStatus, ReaderDataPos, get_page_size};
+use crate::{
+    buffer_aux::{BufferDataPos, BufferStatus},
+    linux::utils::get_page_size,
+};
 use anyhow::Context;
 use io_uring::IoUring;
 
-use super::buffer_linux::ReaderBuffer;
-pub struct SequentialReader {
+use super::buffer::Buffer;
+pub struct SequentialWriter {
     #[allow(unused)]
     file: fs::File, // 不能删掉。要保证文件是打开的！
     fpath: String,
-    buff_size: usize,
+    buffer_size: usize,
     ring: IoUring,
-    buffers: Vec<ReaderBuffer>,
-    buffers_flag: Vec<ReaderBufferStatus>,
-    data_location: ReaderDataPos, // 即将要读取的 buffer 以及 offset
+    buffers: Vec<Buffer>,
+    buffers_flag: Vec<BufferStatus>,
+    data_location: BufferDataPos, // 即将要读取的 buffer 以及 offset
     pending_io: usize,
-    init_flag: bool,
     file_pos_cursor: u64,
-    file_size: u64,
 }
 
-impl SequentialReader {
+impl SequentialWriter {
     /// the caller need to make sure the sequential meta is valid
     pub fn new(
         fpath: &str,
@@ -34,13 +35,15 @@ impl SequentialReader {
         num_buffer: usize,
     ) -> anyhow::Result<Self> {
         let file = OpenOptions::new()
-            .read(true)
+            .write(true)
+            .create(true)
             .custom_flags(libc::O_DIRECT)
             .open(fpath)
             .unwrap();
 
         let page_size = get_page_size();
         assert_eq!(buffer_size % page_size, 0);
+        assert_eq!(start_pos as usize % page_size, 0);
 
         if page_size == 0 {
             anyhow::bail!("get_page_size returned 0, which is invalid");
@@ -48,8 +51,8 @@ impl SequentialReader {
 
         let ring = IoUring::new(num_buffer as u32).unwrap();
 
-        let mut buffers: Vec<ReaderBuffer> = (0..num_buffer)
-            .map(|_| ReaderBuffer::new(buffer_size, page_size))
+        let mut buffers: Vec<Buffer> = (0..num_buffer)
+            .map(|_| Buffer::new(buffer_size, page_size))
             .collect();
 
         let iovecs = buffers
@@ -66,12 +69,12 @@ impl SequentialReader {
         let offset = start_pos as usize % buffer_size;
         let readstart = start_pos - offset as u64;
 
-        let data_location = ReaderDataPos {
+        let data_location = BufferDataPos {
             buf_idx: 0,
             offset: offset as usize,
         };
 
-        let buffers_flag = vec![ReaderBufferStatus::Ready4Submit; num_buffer];
+        let buffers_flag = vec![BufferStatus::Ready4Process; num_buffer];
 
         unsafe {
             ring.submitter()
@@ -85,80 +88,58 @@ impl SequentialReader {
         Ok(Self {
             file,
             fpath: fpath.to_string(),
-            buff_size: buffer_size,
+            buffer_size,
             ring,
             buffers,
             buffers_flag,
             data_location: data_location,
             pending_io: 0,
-            init_flag: false,
             file_pos_cursor: readstart,
-            file_size: super::utils::get_file_size(fpath),
         })
     }
 
-    pub fn read2buf(&mut self, buf: &mut [u8]) -> anyhow::Result<usize> {
-        self.read_exact(buf)
-    }
-
-    fn read_exact(&mut self, data: &mut [u8]) -> anyhow::Result<usize> {
+    pub fn write(&mut self, data: &[u8]) -> anyhow::Result<()> {
         let record_len = data.len();
         let mut data_start = 0;
 
         while data_start < record_len {
             let buf_idx = self.data_location.buf_idx;
-            self.wait_buf_ready4read(buf_idx)?;
-            if self.buffers_flag[buf_idx] == ReaderBufferStatus::Invalid {
-                // no more data to read
-                return Ok(data_start);
-            }
+            self.wait_buf_ready4write(buf_idx)?;
 
             let expected_data_size = record_len - data_start;
 
             let (fill_size, current_buf_remaining) = {
-                let buf = &self.buffers[buf_idx];
+                let buf = &mut self.buffers[buf_idx];
 
-                let current_buf_remaining = (buf.len() - self.data_location.offset) as usize;
+                let current_buf_remaining = (self.buffer_size - self.data_location.offset) as usize;
                 let fill_size = current_buf_remaining.min(expected_data_size);
-                data[data_start..data_start + fill_size].copy_from_slice(
-                    &buf[self.data_location.offset..self.data_location.offset + fill_size],
-                );
+
+                (&mut buf[self.data_location.offset..self.data_location.offset + fill_size])
+                    .copy_from_slice(&data[data_start..data_start + fill_size]);
+
                 (fill_size, current_buf_remaining)
             };
 
             self.data_location.offset += fill_size;
             data_start += fill_size;
             if expected_data_size >= current_buf_remaining {
-                // current buffer is not enough, need to read next buffer
-                // self.ready4sqe_buffer_indices.push(buf_idx);
                 let next_buf_idx: usize = (buf_idx + 1) % self.buffers.len();
                 self.data_location.buf_idx = next_buf_idx;
                 self.data_location.offset = 0;
 
-                self.buffers_flag[buf_idx] = ReaderBufferStatus::Ready4Submit;
-                self.submit_read_event(buf_idx)?;
+                self.buffers_flag[buf_idx] = BufferStatus::Ready4Submit;
+                self.submit_write_event(buf_idx)?;
             }
         }
 
-        Ok(record_len)
+        Ok(())
     }
 
-    fn wait_buf_ready4read(&mut self, buf_idx: usize) -> anyhow::Result<()> {
-        if self.buffers_flag[buf_idx] == ReaderBufferStatus::Ready4Read {
+    fn wait_buf_ready4write(&mut self, buf_idx: usize) -> anyhow::Result<()> {
+        if self.buffers_flag[buf_idx] == BufferStatus::Ready4Process {
             return Ok(());
         }
 
-        if self.buffers_flag[buf_idx] == ReaderBufferStatus::Invalid {
-            return Ok(());
-        }
-
-        // initial state
-        if !self.init_flag {
-            for idx in 0..self.buffers.len() {
-                self.submit_read_event(idx)?;
-            }
-            self.init_flag = true;
-        }
         while self.pending_io > 0 {
             self.ring
                 .submit_and_wait(1)
@@ -171,11 +152,11 @@ impl SequentialReader {
             self.pending_io -= 1;
 
             let idx = cqe.user_data() as usize;
-            self.buffers_flag[idx] = ReaderBufferStatus::Ready4Read;
+            self.buffers_flag[idx] = BufferStatus::Ready4Process;
             self.buffers[idx].len = cqe.result() as usize;
-            assert_eq!(self.buffers[idx].len, self.buff_size);
+            assert_eq!(self.buffers[idx].len, self.buffer_size);
 
-            if self.buffers_flag[buf_idx] == ReaderBufferStatus::Ready4Read {
+            if self.buffers_flag[buf_idx] == BufferStatus::Ready4Process {
                 return Ok(());
             }
         }
@@ -183,29 +164,10 @@ impl SequentialReader {
         anyhow::bail!("buffer {} is not ready for read", buf_idx);
     }
 
-    fn submit_read_event(&mut self, buf_idx: usize) -> anyhow::Result<()> {
-        if self.file_pos_cursor >= self.file_size {
-            // no more data to read
-            self.buffers_flag[buf_idx] = ReaderBufferStatus::Invalid;
-            return Ok(());
-        }
-
-        if (self.file_pos_cursor + self.buff_size as u64) > self.file_size {
-            // last read
-            let remaining_bytes = (self.file_size - self.file_pos_cursor) as usize;
-            let mut f = std::fs::File::open(&self.fpath)?;
-            f.seek(std::io::SeekFrom::Start(self.file_pos_cursor))?;
-            f.read_exact(&mut self.buffers[buf_idx][..remaining_bytes])?;
-            // println!(" ..... LAST READ HERE .....");
-            self.buffers_flag[buf_idx] = ReaderBufferStatus::Ready4Read;
-            self.buffers[buf_idx].len = remaining_bytes;
-            self.file_pos_cursor += remaining_bytes as u64;
-            return Ok(());
-        }
-
+    fn submit_write_event(&mut self, buf_idx: usize) -> anyhow::Result<()> {
         let buf_cap = self.buffers[buf_idx].cap();
         self.buffers[buf_idx].len = 0; // reset length before read
-        let sqe = io_uring::opcode::ReadFixed::new(
+        let sqe = io_uring::opcode::WriteFixed::new(
             io_uring::types::Fixed(0),
             self.buffers[buf_idx].as_mut_ptr(),
             buf_cap as u32,
@@ -224,5 +186,34 @@ impl SequentialReader {
         self.pending_io += 1;
         self.file_pos_cursor += buf_cap as u64;
         Ok(())
+    }
+}
+
+impl Drop for SequentialWriter {
+    fn drop(&mut self) {
+        while self.pending_io > 0 {
+            self.ring
+                .submit_and_wait(1)
+                .expect("Failed to submit and wait");
+            let _cqe = self
+                .ring
+                .completion()
+                .next()
+                .expect("No completion event found");
+            self.pending_io -= 1;
+        }
+
+        if self.data_location.offset > 0 {
+            let mut f = std::fs::OpenOptions::new()
+                .read(true) // 可读
+                .write(true) // 可写
+                .create(true) // 不存在则创建
+                .open(&self.fpath)
+                .unwrap();
+            f.seek(std::io::SeekFrom::Start(self.file_pos_cursor as u64))
+                .unwrap();
+            f.write_all(&self.buffers[self.data_location.buf_idx][..self.data_location.offset])
+                .unwrap();
+        }
     }
 }

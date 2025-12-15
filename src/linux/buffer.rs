@@ -39,13 +39,13 @@ impl DerefMut for AlignedVecU8 {
     }
 }
 
-pub struct ReaderBuffer {
+pub struct Buffer {
     pub data: AlignedVecU8,
     pub len: usize,
     pub cap: usize
 }
 
-impl ReaderBuffer {
+impl Buffer {
     pub fn new(buf_size: usize, page_size: usize) -> Self {
         let data = AlignedVecU8::new(buf_size, page_size);
         Self { data, len: 0,cap: buf_size }
@@ -58,7 +58,7 @@ impl ReaderBuffer {
     }
 }
 
-impl Deref for ReaderBuffer {
+impl Deref for Buffer {
     type Target = Vec<u8>;
 
     fn deref(&self) -> &Self::Target {
@@ -66,7 +66,7 @@ impl Deref for ReaderBuffer {
     }
 }
 
-impl DerefMut for ReaderBuffer {
+impl DerefMut for Buffer {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.data
     }

@@ -5,20 +5,23 @@ use std::{
     os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
 };
 
-use crate::reader::utils::{ReaderBufferStatus, ReaderDataPos, get_page_size};
+use crate::{
+    buffer_aux::{BufferDataPos, BufferStatus},
+    linux::utils::get_page_size,
+};
 use anyhow::Context;
 use io_uring::IoUring;
 
-use super::buffer_linux::ReaderBuffer;
+use super::buffer::Buffer;
 pub struct SequentialReader {
     #[allow(unused)]
     file: fs::File, // 不能删掉。要保证文件是打开的！
     fpath: String,
     buff_size: usize,
     ring: IoUring,
-    buffers: Vec<ReaderBuffer>,
-    buffers_flag: Vec<ReaderBufferStatus>,
-    data_location: ReaderDataPos, // 即将要读取的 buffer 以及 offset
+    buffers: Vec<Buffer>,
+    buffers_flag: Vec<BufferStatus>,
+    data_location: BufferDataPos, // 即将要读取的 buffer 以及 offset
     pending_io: usize,
     init_flag: bool,
     file_pos_cursor: u64,
@@ -48,8 +51,8 @@ impl SequentialReader {
 
         let ring = IoUring::new(num_buffer as u32).unwrap();
 
-        let mut buffers: Vec<ReaderBuffer> = (0..num_buffer)
-            .map(|_| ReaderBuffer::new(buffer_size, page_size))
+        let mut buffers: Vec<Buffer> = (0..num_buffer)
+            .map(|_| Buffer::new(buffer_size, page_size))
             .collect();
 
         let iovecs = buffers
@@ -66,12 +69,12 @@ impl SequentialReader {
         let offset = start_pos as usize % buffer_size;
         let readstart = start_pos - offset as u64;
 
-        let data_location = ReaderDataPos {
+        let data_location = BufferDataPos {
             buf_idx: 0,
             offset: offset as usize,
         };
 
-        let buffers_flag = vec![ReaderBufferStatus::Ready4Submit; num_buffer];
+        let buffers_flag = vec![BufferStatus::Ready4Submit; num_buffer];
 
         unsafe {
             ring.submitter()
@@ -93,7 +96,7 @@ impl SequentialReader {
             pending_io: 0,
             init_flag: false,
             file_pos_cursor: readstart,
-            file_size: super::utils::get_file_size(fpath),
+            file_size: crate::utils::get_file_size(fpath),
         })
     }
 
@@ -108,7 +111,7 @@ impl SequentialReader {
         while data_start < record_len {
             let buf_idx = self.data_location.buf_idx;
             self.wait_buf_ready4read(buf_idx)?;
-            if self.buffers_flag[buf_idx] == ReaderBufferStatus::Invalid {
+            if self.buffers_flag[buf_idx] == BufferStatus::Invalid {
                 // no more data to read
                 return Ok(data_start);
             }
@@ -135,7 +138,7 @@ impl SequentialReader {
                 self.data_location.buf_idx = next_buf_idx;
                 self.data_location.offset = 0;
 
-                self.buffers_flag[buf_idx] = ReaderBufferStatus::Ready4Submit;
+                self.buffers_flag[buf_idx] = BufferStatus::Ready4Submit;
                 self.submit_read_event(buf_idx)?;
             }
         }
@@ -144,11 +147,11 @@ impl SequentialReader {
     }
 
     fn wait_buf_ready4read(&mut self, buf_idx: usize) -> anyhow::Result<()> {
-        if self.buffers_flag[buf_idx] == ReaderBufferStatus::Ready4Read {
+        if self.buffers_flag[buf_idx] == BufferStatus::Ready4Process {
             return Ok(());
         }
 
-        if self.buffers_flag[buf_idx] == ReaderBufferStatus::Invalid {
+        if self.buffers_flag[buf_idx] == BufferStatus::Invalid {
             return Ok(());
         }
 
@@ -171,11 +174,11 @@ impl SequentialReader {
             self.pending_io -= 1;
 
             let idx = cqe.user_data() as usize;
-            self.buffers_flag[idx] = ReaderBufferStatus::Ready4Read;
+            self.buffers_flag[idx] = BufferStatus::Ready4Process;
             self.buffers[idx].len = cqe.result() as usize;
             assert_eq!(self.buffers[idx].len, self.buff_size);
 
-            if self.buffers_flag[buf_idx] == ReaderBufferStatus::Ready4Read {
+            if self.buffers_flag[buf_idx] == BufferStatus::Ready4Process {
                 return Ok(());
             }
         }
@@ -186,7 +189,7 @@ impl SequentialReader {
     fn submit_read_event(&mut self, buf_idx: usize) -> anyhow::Result<()> {
         if self.file_pos_cursor >= self.file_size {
             // no more data to read
-            self.buffers_flag[buf_idx] = ReaderBufferStatus::Invalid;
+            self.buffers_flag[buf_idx] = BufferStatus::Invalid;
             return Ok(());
         }
 
@@ -197,7 +200,7 @@ impl SequentialReader {
             f.seek(std::io::SeekFrom::Start(self.file_pos_cursor))?;
             f.read_exact(&mut self.buffers[buf_idx][..remaining_bytes])?;
             // println!(" ..... LAST READ HERE .....");
-            self.buffers_flag[buf_idx] = ReaderBufferStatus::Ready4Read;
+            self.buffers_flag[buf_idx] = BufferStatus::Ready4Process;
             self.buffers[buf_idx].len = remaining_bytes;
             self.file_pos_cursor += remaining_bytes as u64;
             return Ok(());

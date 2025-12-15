@@ -9,9 +9,11 @@ pub use windows::sequential_reader::SequentialReader;
 #[cfg(target_os = "linux")]
 pub use linux::sequential_reader::SequentialReader;
 
-
 #[cfg(windows)]
 pub use windows::sequential_writer::SequentialWriter;
+
+#[cfg(target_os = "linux")]
+pub use linux::sequential_writer::SequentialWriter;
 
 #[cfg(test)]
 mod test {
@@ -53,15 +55,14 @@ mod test {
         println!("");
     }
 
-
-
     #[test]
     fn test_sequential_writer() {
-
-        let mut writer = SequentialWriter::new("test_data/test_data_writer.txt", 0, 4096, 2).unwrap();
+        let mut writer =
+            SequentialWriter::new("test_data/test_data_writer.txt", 0, 4096, 2).unwrap();
         for i in 0..1000 {
-            writer.write(b"abcdefghijklmnopqrstuvwxyz\n").unwrap();
+            writer
+                .write(format!("line:{}, abcdefghijklmnopqrstuvwxyz\n", i).as_bytes())
+                .unwrap();
         }
-
     }
 }
