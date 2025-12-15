@@ -6,11 +6,12 @@ pub mod windows;
 #[cfg(windows)]
 pub use windows::sequential_reader::SequentialReader;
 
-#[cfg(target_os = "linux")]
-pub use linux::sequential_reader::SequentialReader;
-
 #[cfg(windows)]
 pub use windows::sequential_writer::SequentialWriter;
+
+
+#[cfg(target_os = "linux")]
+pub use linux::sequential_reader::SequentialReader;
 
 #[cfg(target_os = "linux")]
 pub use linux::sequential_writer::SequentialWriter;
