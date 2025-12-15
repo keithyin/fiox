@@ -30,7 +30,7 @@ impl SequentialWriter {
         num_buffer: usize,
     ) -> anyhow::Result<Self> {
         assert!(buffer_size % 4096 == 0);
-        assert!(start_pos as usize % buffer_size == 0);
+        assert!(start_pos as usize % 4096 == 0);
 
         let handle = FileHandle::new(fpath, crate::windows::handles::FileMode::Write)?;
 
@@ -70,8 +70,7 @@ impl SequentialWriter {
         while remaining_bytes > 0 {
             self.wait_inner_buf_ready()?;
 
-            let cur_buf_write_n =
-                remaining_bytes.min(self.buffer_size - self.data_pos.offset);
+            let cur_buf_write_n = remaining_bytes.min(self.buffer_size - self.data_pos.offset);
 
             unsafe {
                 std::ptr::copy(
