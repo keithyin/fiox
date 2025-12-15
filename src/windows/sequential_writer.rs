@@ -1,7 +1,6 @@
 #![cfg(windows)]
 #![allow(non_snake_case)]
 use std::io::{Seek, Write};
-use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Storage::FileSystem::WriteFile;
 use windows_sys::Win32::System::IO::{GetQueuedCompletionStatus, OVERLAPPED};
 use windows_sys::Win32::System::Threading::INFINITE;

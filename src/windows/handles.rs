@@ -57,8 +57,8 @@ impl FileHandle {
 impl Drop for FileHandle {
     fn drop(&mut self) {
         let ret = unsafe { CloseHandle(self.handle) };
-        println!("FileHandle Drop: ret={}", ret);
-        if ret != 0 {
+        // println!("FileHandle Drop: ret={}", ret);
+        if ret == 0 {
             let err = unsafe { GetLastError() };
             eprintln!("CloseHandle failed with error: {}", err);
         }
