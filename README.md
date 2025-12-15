@@ -8,7 +8,7 @@ fiox delivers **ultra-low-latency, high-throughput file I/O** by leveraging mode
 - **Linux**: Direct `io_uring` integration (bypassing traditional syscall overhead)
 - **Windows**: Native `I/O Completion Ports` (IOCP) for scalable async I/O
 
-Paired with efficient **lock-free ring buffers**, RingIO enables seamless zero-copy data pipelines — ideal for databases, log processors, and real-time analytics.
+Paired with efficient **ring buffers**, RingIO enables seamless zero-copy data pipelines — ideal for databases, log processors, and real-time analytics.
 
 ---
 
