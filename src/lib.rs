@@ -9,12 +9,18 @@ pub use windows::sequential_reader::SequentialReader;
 #[cfg(target_os = "linux")]
 pub use linux::sequential_reader::SequentialReader;
 
+
+#[cfg(windows)]
+pub use windows::sequential_writer::SequentialWriter;
+
 #[cfg(test)]
 mod test {
     use std::{
         fs,
         io::{Read, Seek},
     };
+
+    use crate::SequentialWriter;
 
     use super::SequentialReader;
 
@@ -45,5 +51,17 @@ mod test {
         }
         assert_eq!(read_size, file_size - read_start_pos);
         println!("");
+    }
+
+
+
+    #[test]
+    fn test_sequential_writer() {
+
+        let mut writer = SequentialWriter::new("test_data/test_data_writer.txt", 0, 4096, 2).unwrap();
+        for i in 0..1000 {
+            writer.write(b"abcdefghijklmnopqrstuvwxyz\n").unwrap();
+        }
+
     }
 }

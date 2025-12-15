@@ -1,95 +1,15 @@
 #![cfg(windows)]
 #![allow(non_snake_case)]
-use std::ffi::c_void;
 use std::io::{Read, Seek};
-use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
-use windows_sys::Win32::Foundation::{GENERIC_READ, GetLastError};
-use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_OVERLAPPED, FILE_FLAG_SEQUENTIAL_SCAN,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, ReadFile,
-};
-use windows_sys::Win32::System::IO::{
-    CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED,
-};
+
+use windows_sys::Win32::Storage::FileSystem::ReadFile;
+use windows_sys::Win32::System::IO::{GetQueuedCompletionStatus, OVERLAPPED};
 use windows_sys::Win32::System::Threading::INFINITE;
 
 use super::buffer::ReaderBuffer;
-use crate::buffer_aux::{BufferStatus, BufferDataPos};
-use super::utils::str_to_wide;
+use crate::buffer_aux::{BufferDataPos, BufferStatus};
 use crate::utils::get_file_size;
-
-struct FileHandle {
-    handle: *mut c_void,
-}
-impl FileHandle {
-    fn new(fpath: &str) -> anyhow::Result<Self> {
-        let fpath_wide = str_to_wide(fpath);
-
-        let handle = unsafe {
-            CreateFileW(
-                fpath_wide.as_ptr(),
-                GENERIC_READ,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                std::ptr::null(),
-                OPEN_EXISTING,
-                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED | FILE_FLAG_SEQUENTIAL_SCAN,
-                std::ptr::null_mut(),
-            )
-        };
-
-        if handle == INVALID_HANDLE_VALUE {
-            anyhow::bail!("INVALID_HANDLE_VALUE");
-        }
-
-        Ok(Self { handle })
-    }
-}
-
-impl Drop for FileHandle {
-    fn drop(&mut self) {
-        let ret = unsafe { CloseHandle(self.handle) };
-        println!("FileHandle Drop: ret={}", ret);
-        if ret != 0 {
-            let err = unsafe { GetLastError() };
-            eprintln!("CloseHandle failed with error: {}", err);
-        }
-    }
-}
-
-struct IocpHandle {
-    handle: *mut c_void,
-}
-
-impl IocpHandle {
-    fn new() -> anyhow::Result<Self> {
-        let iocp =
-            unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 0) };
-        if iocp == std::ptr::null_mut() {
-            anyhow::bail!("CreateIoCompletionPort New Failed");
-        }
-        Ok(Self { handle: iocp })
-    }
-
-    fn init(&mut self, filehandle: *mut c_void) -> anyhow::Result<()> {
-        let new_handle = unsafe { CreateIoCompletionPort(filehandle, self.handle, 0, 0) };
-        if new_handle == std::ptr::null_mut() {
-            anyhow::bail!("CreateIoCompletionPort Init Failed");
-        }
-        self.handle = new_handle;
-        Ok(())
-    }
-}
-
-impl Drop for IocpHandle {
-    fn drop(&mut self) {
-        let ret = unsafe { CloseHandle(self.handle) };
-        println!("IocpHandle Drop: ret={}", ret);
-        if ret == 0 {
-            let err = unsafe { GetLastError() };
-            eprintln!("CloseHandle failed with error: {}", err);
-        }
-    }
-}
+use crate::windows::handles::{FileHandle, FileMode, IocpHandle};
 
 pub struct SequentialReader {
     fpath: String,
@@ -117,7 +37,7 @@ impl SequentialReader {
 
         let file_size = get_file_size(fpath);
 
-        let handle = FileHandle::new(fpath)?;
+        let handle = FileHandle::new(fpath, FileMode::Read)?;
 
         let mut iocp = IocpHandle::new()?;
         iocp.init(handle.handle)?;
