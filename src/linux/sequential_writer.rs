@@ -1,7 +1,7 @@
 #![cfg(target_os = "linux")]
 use std::{
     fs::{self, OpenOptions},
-    io::{Read, Seek, Write},
+    io::{Seek, Write},
     os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
 };
 
