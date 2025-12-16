@@ -92,7 +92,7 @@ impl IocpHandle {
 impl Drop for IocpHandle {
     fn drop(&mut self) {
         let ret = unsafe { CloseHandle(self.handle) };
-        println!("IocpHandle Drop: ret={}", ret);
+        // println!("IocpHandle Drop: ret={}", ret);
         if ret == 0 {
             let err = unsafe { GetLastError() };
             eprintln!("CloseHandle failed with error: {}", err);
