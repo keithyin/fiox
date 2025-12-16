@@ -1,6 +1,6 @@
 [package]
 name = "fiox"
-version = "0.1.1"
+version = "0.1.4"
 edition = "2024"
 description = "file I/O using io_uring/iocp"
 license = "MIT"
