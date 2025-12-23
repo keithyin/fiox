@@ -1,7 +1,6 @@
 #![cfg(target_os = "linux")]
 use std::{
     fs::{self, OpenOptions},
-    io::{Read, Seek},
     os::{
         fd::AsRawFd,
         unix::fs::{FileExt, OpenOptionsExt},
