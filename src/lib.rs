@@ -31,7 +31,7 @@ mod test {
     fn test_sequential_reader() {
         let read_start_pos = 10;
         let mut reader =
-            SequentialReader::new("test_data/test_data.txt", read_start_pos, 4096, 2).unwrap();
+            SequentialReader::new("test_data/test_data.txt", read_start_pos, 4096, 2, None).unwrap();
         let mut reader2 = fs::File::open("test_data/test_data.txt").unwrap();
         reader2
             .seek(std::io::SeekFrom::Start(read_start_pos))

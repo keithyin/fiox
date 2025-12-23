@@ -2,7 +2,10 @@
 use std::{
     fs::{self, OpenOptions},
     io::{Read, Seek},
-    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    os::{
+        fd::AsRawFd,
+        unix::fs::{FileExt, OpenOptionsExt},
+    },
 };
 
 use crate::{
@@ -25,7 +28,7 @@ pub struct SequentialReader {
     pending_io: usize,
     init_flag: bool,
     file_pos_cursor: u64,
-    file_size: u64,
+    end_pos: u64,
 }
 
 impl SequentialReader {
@@ -35,6 +38,7 @@ impl SequentialReader {
         start_pos: u64,
         buffer_size: usize,
         num_buffer: usize,
+        end_pos: Option<u64>,
     ) -> anyhow::Result<Self> {
         let file = OpenOptions::new()
             .read(true)
@@ -85,6 +89,16 @@ impl SequentialReader {
                 .expect("register file error");
         }
 
+        let file_size = crate::utils::get_file_size(fpath);
+        let end_pos = match end_pos {
+            Some(pos) => pos,
+            None => file_size,
+        };
+
+        if end_pos > file_size {
+            anyhow::bail!("end_pos {} is larger than file size {}", end_pos, file_size);
+        }
+
         Ok(Self {
             file,
             fpath: fpath.to_string(),
@@ -96,7 +110,7 @@ impl SequentialReader {
             pending_io: 0,
             init_flag: false,
             file_pos_cursor: readstart,
-            file_size: crate::utils::get_file_size(fpath),
+            end_pos: end_pos,
         })
     }
 
@@ -187,18 +201,21 @@ impl SequentialReader {
     }
 
     fn submit_read_event(&mut self, buf_idx: usize) -> anyhow::Result<()> {
-        if self.file_pos_cursor >= self.file_size {
+        if self.file_pos_cursor >= self.end_pos {
             // no more data to read
             self.buffers_flag[buf_idx] = BufferStatus::Invalid;
             return Ok(());
         }
 
-        if (self.file_pos_cursor + self.buff_size as u64) > self.file_size {
+        if (self.file_pos_cursor + self.buff_size as u64) > self.end_pos {
             // last read
-            let remaining_bytes = (self.file_size - self.file_pos_cursor) as usize;
-            let mut f = std::fs::File::open(&self.fpath)?;
-            f.seek(std::io::SeekFrom::Start(self.file_pos_cursor))?;
-            f.read_exact(&mut self.buffers[buf_idx][..remaining_bytes])?;
+            let remaining_bytes = (self.end_pos - self.file_pos_cursor) as usize;
+            let f = std::fs::File::open(&self.fpath)?;
+            f.read_exact_at(
+                &mut self.buffers[buf_idx][..remaining_bytes],
+                self.file_pos_cursor,
+            )?;
+
             // println!(" ..... LAST READ HERE .....");
             self.buffers_flag[buf_idx] = BufferStatus::Ready4Process;
             self.buffers[buf_idx].len = remaining_bytes;

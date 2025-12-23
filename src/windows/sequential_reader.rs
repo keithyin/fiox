@@ -32,6 +32,7 @@ impl SequentialReader {
         start_pos: u64,
         buffer_size: usize,
         num_buffer: usize,
+        end_pos: Option<u64>,
     ) -> anyhow::Result<Self> {
         assert!(buffer_size % 4096 == 0);
 
@@ -170,14 +171,16 @@ impl SequentialReader {
 
             // println!("...HERE...");
             let mut f = std::fs::File::open(&self.fpath).unwrap();
-            f.seek(std::io::SeekFrom::Start(self.file_pos_cursor))
-                .unwrap();
+            // f.seek(std::io::SeekFrom::Start(self.file_pos_cursor))
+            //     .unwrap();
             let remaining_bytes = (self.file_size - self.file_pos_cursor) as usize;
             let buf_slice = unsafe {
                 std::slice::from_raw_parts_mut(self.buffers[buf_idx].data, remaining_bytes)
             };
 
-            f.read_exact(buf_slice).unwrap();
+            f.read_exact_at(buf_slice, self.file_pos_cursor)?;
+
+            // f.read_exact(buf_slice).unwrap();
             self.buffers[buf_idx].len = remaining_bytes;
             self.buffers_status[buf_idx] = BufferStatus::Ready4Process;
             self.file_pos_cursor += remaining_bytes as u64;
