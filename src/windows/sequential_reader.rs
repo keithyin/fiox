@@ -19,12 +19,13 @@ pub struct SequentialReader {
     buffer_size: usize,
     data_pos: BufferDataPos,
     file_pos_cursor: u64,
-    file_size: u64,
+    end_pos: u64,
     init_flag: bool,
     pendding: usize,
 
     iocp: IocpHandle,
 }
+unsafe impl Send for SequentialReader {}
 
 impl SequentialReader {
     pub fn new(
@@ -37,6 +38,13 @@ impl SequentialReader {
         assert!(buffer_size % 4096 == 0);
 
         let file_size = get_file_size(fpath);
+        let end_pos = match end_pos {
+            Some(pos) => pos,
+            None => file_size,
+        };
+        if end_pos > file_size {
+            anyhow::bail!("end_pos {} is larger than file size {}", end_pos, file_size);
+        }
 
         let handle = FileHandle::new(fpath, FileMode::Read)?;
 
@@ -53,6 +61,7 @@ impl SequentialReader {
             .into_iter()
             .map(|idx| ReaderBuffer::new(buffer_size, idx))
             .collect();
+
         Ok(Self {
             fpath: fpath.to_string(),
             handle: handle,
@@ -61,7 +70,7 @@ impl SequentialReader {
             buffer_size: buffer_size,
             data_pos: data_pose,
             file_pos_cursor: file_pos_cursor,
-            file_size: file_size,
+            end_pos: end_pos,
             init_flag: false,
             pendding: 0,
             iocp,
@@ -161,30 +170,30 @@ impl SequentialReader {
     }
 
     fn submit_read_event(&mut self, buf_idx: usize) {
-        if self.file_pos_cursor >= self.file_size {
+        if self.file_pos_cursor >= self.end_pos {
             self.buffers_status[buf_idx] = BufferStatus::Invalid;
             return;
         }
 
-        if (self.file_pos_cursor + self.buffer_size as u64) > self.file_size {
+        if (self.file_pos_cursor + self.buffer_size as u64) > self.end_pos {
             // use other method to read the remaining data
 
             // println!("...HERE...");
             let mut f = std::fs::File::open(&self.fpath).unwrap();
-            // f.seek(std::io::SeekFrom::Start(self.file_pos_cursor))
-            //     .unwrap();
-            let remaining_bytes = (self.file_size - self.file_pos_cursor) as usize;
+            f.seek(std::io::SeekFrom::Start(self.file_pos_cursor))
+                .unwrap();
+            let remaining_bytes = (self.end_pos - self.file_pos_cursor) as usize;
             let buf_slice = unsafe {
                 std::slice::from_raw_parts_mut(self.buffers[buf_idx].data, remaining_bytes)
             };
 
-            f.read_exact_at(buf_slice, self.file_pos_cursor)?;
+            f.read_exact(buf_slice).unwrap();
 
             // f.read_exact(buf_slice).unwrap();
             self.buffers[buf_idx].len = remaining_bytes;
             self.buffers_status[buf_idx] = BufferStatus::Ready4Process;
             self.file_pos_cursor += remaining_bytes as u64;
-            assert_eq!(self.file_pos_cursor, self.file_size);
+            assert_eq!(self.file_pos_cursor, self.end_pos);
             return;
         }
 

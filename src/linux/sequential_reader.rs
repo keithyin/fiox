@@ -30,6 +30,7 @@ pub struct SequentialReader {
     file_pos_cursor: u64,
     end_pos: u64,
 }
+unsafe impl Send for SequentialReader {}
 
 impl SequentialReader {
     /// the caller need to make sure the sequential meta is valid
