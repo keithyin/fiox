@@ -1,6 +1,10 @@
 
 # fiox
 
+
+![Build Status](https://github.com/keithyin/fiox/actions/workflows/rust.yml/badge.svg)
+[![Crates.io](https://img.shields.io/crates/v/fiox.svg)](https://crates.io/crates/fiox)
+
 > **Zero-Copy, Asynchronous File I/O for Rust — powered by io_uring on Linux and IOCP on Windows, with built-in ring buffer support.**
 
 
