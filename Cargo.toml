@@ -24,3 +24,4 @@ windows-sys = { version = "0.61", features = [
 [dependencies]
 anyhow = "1"
 clap ={ version = "4", features = ["derive"]}
+indicatif = "0.18"
