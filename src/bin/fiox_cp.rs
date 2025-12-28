@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use fiox::{SequentialReader, SequentialWriter};
 use indicatif::ProgressStyle;
@@ -26,7 +26,7 @@ fn main() {
 }
 
 fn cp_path(src: &Path, dst: &Path, recursive: bool) -> Result<()> {
-    let meta = std::fs::metadata(src)?;
+    let meta = std::fs::metadata(src).context(format!("get meta error. {}", src.display()))?;
 
     if meta.is_file() {
         cp_file(src, dst)
@@ -41,14 +41,16 @@ fn cp_path(src: &Path, dst: &Path, recursive: bool) -> Result<()> {
 }
 
 fn cp_file(src: &Path, dst: &Path) -> Result<()> {
-    let src_meta = std::fs::metadata(src)?;
+    let src_meta = std::fs::metadata(src).context(format!("get meta error. {}", src.display()))?;
     if src_meta.len() == 0 {
         std::fs::File::create(dst)?; // create empty file
         return Ok(());
     }
 
-    let dst_meta = std::fs::metadata(dst)?;
-    if dst_meta.is_dir() {
+    if dst.is_dir() || dst.to_str().unwrap().ends_with("/") {
+        if !dst.exists() {
+            std::fs::create_dir_all(dst)?;
+        }
         let dst_file_path = dst.join(src.file_name().unwrap());
         return cp_file(src, &dst_file_path);
     }
@@ -59,7 +61,13 @@ fn cp_file(src: &Path, dst: &Path) -> Result<()> {
     let mut buf = vec![0u8; 4096];
 
     let pb = indicatif::ProgressBar::new(src_meta.len());
-    pb.set_style(ProgressStyle::with_template("{msg}::> \n{wide_bar} {human_pos}/{human_len} speed:{per_sec} elapsed:{elapsed} eta:{eta}").unwrap());
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{msg}\n{wide_bar} {binary_bytes}/{binary_total_bytes} \
+         speed:{binary_bytes_per_sec} elapsed:{elapsed} eta:{eta}",
+        )
+        .unwrap(),
+    );
     pb.set_message(format!("copying {} to {}", src.display(), dst.display()));
     pb.enable_steady_tick(Duration::from_millis(200));
 
@@ -71,7 +79,11 @@ fn cp_file(src: &Path, dst: &Path) -> Result<()> {
         }
         dst_file.write(&buf[..n])?;
     }
-    pb.finish();
+    pb.finish_with_message(format!(
+        "finished copying {} to {}",
+        src.display(),
+        dst.display()
+    ));
 
     Ok(())
 }
