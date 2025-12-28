@@ -1,6 +1,10 @@
 
 # fiox
 
+
+![Build Status](https://github.com/keithyin/fiox/actions/workflows/rust.yml/badge.svg)
+[![Crates.io](https://img.shields.io/crates/v/fiox.svg)](https://crates.io/crates/fiox)
+
 > **Zero-Copy, Asynchronous File I/O for Rust — powered by io_uring on Linux and IOCP on Windows, with built-in ring buffer support.**
 
 
@@ -8,7 +12,7 @@ fiox delivers **ultra-low-latency, high-throughput file I/O** by leveraging mode
 - **Linux**: Direct `io_uring` integration (bypassing traditional syscall overhead)
 - **Windows**: Native `I/O Completion Ports` (IOCP) for scalable async I/O
 
-Paired with efficient **ring buffers**, RingIO enables seamless zero-copy data pipelines — ideal for databases, log processors, and real-time analytics.
+Paired with efficient **ring buffers**, RingIO enables seamless zero-copy data pipelines 
 
 ---
 
